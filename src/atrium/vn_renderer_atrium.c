@@ -137,15 +137,10 @@ atrium_submit(struct vn_renderer *renderer,
          struct atrium_gpu_submit_3d sub = {
             .cmd_ptr  = (uint64_t)(uintptr_t)b->cs_data,
             .cmd_size = (uint32_t)b->cs_size,
-            .flags    = ATRIUM_GPU_SUBMIT_3D_SIGNAL_FENCE,
+            .flags    = b->sync_count ? ATRIUM_GPU_SUBMIT_3D_SIGNAL_FENCE : 0,
          };
-         fprintf(stderr, "[atrium-vn] SUBMIT_3D ring=%u sz=%u\n",
-                 b->ring_idx, (unsigned)b->cs_size);
-         if (ioctl(r->fd, ATRIUM_GPU_IOC_SUBMIT_3D, &sub) < 0) {
-            fprintf(stderr, "[atrium-vn] SUBMIT_3D failed: %s\n",
-                    strerror(errno));
+         if (ioctl(r->fd, ATRIUM_GPU_IOC_SUBMIT_3D, &sub) < 0)
             return VK_ERROR_DEVICE_LOST;
-         }
       }
 
       /* Submit is synchronous (host fence retires before SUBMIT_3D
