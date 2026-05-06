@@ -202,9 +202,28 @@ atrium_shmem_create(struct vn_renderer *renderer, size_t size)
       return NULL;
    }
 
+   /* Expose to the host as a guest-backed blob resource. Without
+    * RESOURCE_ATTACH the host renderer has no idea this shmem region
+    * exists, and the venus ring buffer the frontend writes into is
+    * invisible to the worker — the ring's alive-seqno never advances
+    * and the frontend hangs in vn_ring_wait_alive. */
+   struct atrium_gpu_resource_attach ra = {
+      .bo_handle  = handle,
+      .blob_mem   = ATRIUM_GPU_BLOB_MEM_GUEST,
+      .blob_flags = ATRIUM_GPU_BLOB_USE_MAPPABLE,
+      .blob_id    = 0,  /* shmem isn't a venus VkDeviceMemory */
+   };
+   if (ioctl(r->fd, ATRIUM_GPU_IOC_RESOURCE_ATTACH, &ra) < 0) {
+      munmap(map_ptr, real_size);
+      uint32_t h = handle;
+      ioctl(r->fd, ATRIUM_GPU_IOC_FREE, &h);
+      free(shmem);
+      return NULL;
+   }
+
    shmem->bo_handle           = handle;
    shmem->base.refcount       = VN_REFCOUNT_INIT(1);
-   shmem->base.res_id         = handle;  /* reuse handle as res_id */
+   shmem->base.res_id         = ra.resource_id_out;
    shmem->base.mmap_size      = real_size;
    shmem->base.mmap_ptr       = map_ptr;
    shmem->base.cache_timestamp = 0;
