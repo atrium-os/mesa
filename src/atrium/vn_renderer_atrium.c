@@ -203,6 +203,7 @@ atrium_shmem_create(struct vn_renderer *renderer, size_t size)
    }
 
    shmem->bo_handle           = handle;
+   shmem->base.refcount       = VN_REFCOUNT_INIT(1);
    shmem->base.res_id         = handle;  /* reuse handle as res_id */
    shmem->base.mmap_size      = real_size;
    shmem->base.mmap_ptr       = map_ptr;
@@ -270,6 +271,7 @@ atrium_bo_create_from_device_memory(struct vn_renderer *renderer,
 
    bo->bo_handle      = handle;
    bo->size           = real_size;
+   bo->base.refcount  = VN_REFCOUNT_INIT(1);
    bo->base.res_id    = ra.resource_id_out;
    bo->base.mmap_size = real_size;
    bo->base.mmap_ptr  = NULL;  /* lazy via map() */
