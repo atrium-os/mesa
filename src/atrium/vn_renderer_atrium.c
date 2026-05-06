@@ -64,6 +64,7 @@ struct atrium_bo {
    struct vn_renderer_bo base;
    uint32_t bo_handle;        /* atrium-gpu BO */
    size_t   size;
+   uint64_t mmap_offset;      /* offset to pass to mmap(/dev/atrium-gpu0) */
 };
 
 /* In-memory timeline counter. venus uses syncs as VkSemaphore-shaped
@@ -191,41 +192,36 @@ atrium_shmem_create(struct vn_renderer *renderer, size_t size)
    struct atrium_shmem *shmem = calloc(1, sizeof(*shmem));
    if (!shmem) return NULL;
 
-   uint32_t handle;
-   size_t   real_size;
-   void    *map_ptr;
-   VkResult result = atrium_alloc_bo(r, size,
-       ATRIUM_GPU_BO_GPU_VISIBLE | ATRIUM_GPU_BO_CPU_VISIBLE
-       | ATRIUM_GPU_BO_COHERENT,
-       &handle, &real_size, &map_ptr);
-   if (result != VK_SUCCESS) {
+   /* HOST3D blob path. The kmod allocates a window in the virtio-gpu
+    * host_visible BAR, asks the host to back it with shm, and returns
+    * the BAR offset to mmap. Guest sglists (BLOB_MEM_GUEST) don't work
+    * here because the venus proxy in QEMU exports resources to the
+    * render-server worker as fds — guest sglists have no exportable
+    * fd on macOS/FreeBSD hosts (no udmabuf), and the worker pipe
+    * breaks. See feedback_venus_shmem_must_be_host3d.md. */
+   struct atrium_gpu_host_blob hb = {
+      .size       = size,
+      .blob_flags = ATRIUM_GPU_BLOB_USE_MAPPABLE,
+      .blob_id    = 0,  /* shmem isn't a venus VkDeviceMemory */
+   };
+   if (ioctl(r->fd, ATRIUM_GPU_IOC_HOST_BLOB, &hb) < 0) {
       free(shmem);
       return NULL;
    }
 
-   /* Expose to the host as a guest-backed blob resource. Without
-    * RESOURCE_ATTACH the host renderer has no idea this shmem region
-    * exists, and the venus ring buffer the frontend writes into is
-    * invisible to the worker — the ring's alive-seqno never advances
-    * and the frontend hangs in vn_ring_wait_alive. */
-   struct atrium_gpu_resource_attach ra = {
-      .bo_handle  = handle,
-      .blob_mem   = ATRIUM_GPU_BLOB_MEM_GUEST,
-      .blob_flags = ATRIUM_GPU_BLOB_USE_MAPPABLE,
-      .blob_id    = 0,  /* shmem isn't a venus VkDeviceMemory */
-   };
-   if (ioctl(r->fd, ATRIUM_GPU_IOC_RESOURCE_ATTACH, &ra) < 0) {
-      munmap(map_ptr, real_size);
-      uint32_t h = handle;
+   void *map_ptr = mmap(NULL, hb.actual_size, PROT_READ | PROT_WRITE,
+                        MAP_SHARED, r->fd, hb.mmap_offset);
+   if (map_ptr == MAP_FAILED) {
+      uint32_t h = hb.bo_handle;
       ioctl(r->fd, ATRIUM_GPU_IOC_FREE, &h);
       free(shmem);
       return NULL;
    }
 
-   shmem->bo_handle           = handle;
+   shmem->bo_handle           = hb.bo_handle;
    shmem->base.refcount       = VN_REFCOUNT_INIT(1);
-   shmem->base.res_id         = ra.resource_id_out;
-   shmem->base.mmap_size      = real_size;
+   shmem->base.res_id         = hb.resource_id;
+   shmem->base.mmap_size      = hb.actual_size;
    shmem->base.mmap_ptr       = map_ptr;
    shmem->base.cache_timestamp = 0;
    list_inithead(&shmem->base.cache_head);
@@ -259,44 +255,30 @@ atrium_bo_create_from_device_memory(struct vn_renderer *renderer,
    struct atrium_bo *bo = calloc(1, sizeof(*bo));
    if (!bo) return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   uint32_t handle;
-   size_t   real_size;
-   uint32_t bo_flags = ATRIUM_GPU_BO_GPU_VISIBLE;
-   if (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
-      bo_flags |= ATRIUM_GPU_BO_CPU_VISIBLE | ATRIUM_GPU_BO_COHERENT;
-
-   VkResult result = atrium_alloc_bo(r, size, bo_flags,
-       &handle, &real_size, NULL);
-   if (result != VK_SUCCESS) {
-      free(bo);
-      return result;
-   }
-
-   /* Attach as a venus host-allocated blob backed by guest pages
-    * (BLOB_MEM_GUEST). venus's mem_id becomes the blob_id, so the
-    * host renderer can correlate the resource with the
-    * VkDeviceMemory it allocated. */
-   struct atrium_gpu_resource_attach ra = {
-      .bo_handle  = handle,
-      .blob_mem   = ATRIUM_GPU_BLOB_MEM_GUEST,
+   /* HOST3D blob — same architectural reason as atrium_shmem_create.
+    * blob_id carries the venus mem_id so the host renderer can
+    * correlate the resource with the VkDeviceMemory it allocated. */
+   struct atrium_gpu_host_blob hb = {
+      .size       = size,
       .blob_flags = ATRIUM_GPU_BLOB_USE_MAPPABLE,
       .blob_id    = mem_id,
    };
-   if (ioctl(r->fd, ATRIUM_GPU_IOC_RESOURCE_ATTACH, &ra) < 0) {
-      uint32_t h = handle;
-      ioctl(r->fd, ATRIUM_GPU_IOC_FREE, &h);
+   if (ioctl(r->fd, ATRIUM_GPU_IOC_HOST_BLOB, &hb) < 0) {
       free(bo);
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
    }
 
-   bo->bo_handle      = handle;
-   bo->size           = real_size;
+   bo->bo_handle      = hb.bo_handle;
+   bo->size           = hb.actual_size;
    bo->base.refcount  = VN_REFCOUNT_INIT(1);
-   bo->base.res_id    = ra.resource_id_out;
-   bo->base.mmap_size = real_size;
+   bo->base.res_id    = hb.resource_id;
+   bo->base.mmap_size = hb.actual_size;
    bo->base.mmap_ptr  = NULL;  /* lazy via map() */
+   /* mmap_offset cached on the bo for atrium_bo_map() — vn_renderer_bo
+    * doesn't have a slot for it so we extend our wrapper. */
+   bo->mmap_offset    = hb.mmap_offset;
    *out_bo = &bo->base;
-   (void)etypes;
+   (void)flags; (void)etypes;
    return VK_SUCCESS;
 }
 
@@ -351,10 +333,12 @@ atrium_bo_map(struct vn_renderer *renderer,
       return base->mmap_ptr;
 
    /* placed_addr is a hint from the caller; honor it via MAP_FIXED
-    * if non-NULL so venus can place mappings deterministically. */
+    * if non-NULL so venus can place mappings deterministically.
+    * mmap_offset comes from IOC_HOST_BLOB — no longer derived from
+    * the bo handle. */
    void *p = mmap(placed_addr, bo->size, PROT_READ | PROT_WRITE,
                   MAP_SHARED | (placed_addr ? MAP_FIXED : 0),
-                  r->fd, ((uint64_t)bo->bo_handle) * 0x10000ULL);
+                  r->fd, bo->mmap_offset);
    if (p == MAP_FAILED)
       return NULL;
    base->mmap_ptr = p;

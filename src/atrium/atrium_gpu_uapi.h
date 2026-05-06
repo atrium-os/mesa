@@ -95,4 +95,22 @@ struct atrium_gpu_ctx_fence_wait {
 #define ATRIUM_GPU_IOC_CTX_FENCE_WAIT \
 	_IOWR('G', 0x44, struct atrium_gpu_ctx_fence_wait)
 
+/* V5h: HOST3D blob backed by the virtio-gpu host_visible PCI BAR.
+ * One-shot allocation (no separate ALLOC + ATTACH). mmap_offset is
+ * passed verbatim to mmap(/dev/atrium-gpu0). blob_id == 0 for shmem
+ * (vn_renderer_shmem_create); the venus mem_id otherwise. */
+struct atrium_gpu_host_blob {
+	uint64_t size;
+	uint32_t blob_flags;
+	uint32_t _pad0;
+	uint64_t blob_id;
+	uint32_t bo_handle;
+	uint32_t resource_id;
+	uint64_t mmap_offset;
+	uint64_t actual_size;
+	uint64_t _reserved[2];
+};
+#define ATRIUM_GPU_IOC_HOST_BLOB \
+	_IOWR('G', 0x45, struct atrium_gpu_host_blob)
+
 #endif /* ATRIUM_GPU_UAPI_H_ */
