@@ -229,6 +229,12 @@ struct vn_renderer {
    struct vn_renderer_sync_ops sync_ops;
 };
 
+#ifdef HAVE_ATRIUM
+VkResult
+vn_renderer_create_atrium(struct vn_instance *instance,
+                          const VkAllocationCallbacks *alloc,
+                          struct vn_renderer **renderer);
+#endif
 #ifdef HAVE_LIBDRM
 VkResult
 vn_renderer_create_virtgpu(struct vn_instance *instance,
@@ -246,6 +252,12 @@ vn_renderer_create(struct vn_instance *instance,
                    const VkAllocationCallbacks *alloc,
                    struct vn_renderer **renderer)
 {
+#ifdef HAVE_ATRIUM
+   /* Try the atrium-gpu backend first. Returns INCOMPATIBLE_DRIVER
+    * if /dev/atrium-gpu0 isn't present, in which case we fall through. */
+   if (vn_renderer_create_atrium(instance, alloc, renderer) == VK_SUCCESS)
+      return VK_SUCCESS;
+#endif
 #ifdef HAVE_LIBDRM
    if (VN_DEBUG(VTEST)) {
       VkResult result = vn_renderer_create_vtest(instance, alloc, renderer);

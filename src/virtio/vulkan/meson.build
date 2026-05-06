@@ -116,6 +116,12 @@ if system_has_kms_drm
   vn_deps += dep_libdrm
 endif
 
+if get_option('atrium')
+  libvn_files += files('../../atrium/vn_renderer_atrium.c')
+  vn_c_args   += '-DHAVE_ATRIUM'
+  vn_incs     += include_directories('../../atrium')
+endif
+
 if with_platform_wayland or with_platform_x11 or \
    (system_has_kms_drm and not with_platform_android) or \
    with_platform_windows

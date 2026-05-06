@@ -1,0 +1,68 @@
+From: Atrium contributors
+Subject: vn_renderer: add atrium backend dispatch
+Rationale:
+  vn_renderer_create() (the static inline dispatch in vn_renderer.h)
+  hardcodes the choice between virtgpu (Linux+libdrm) and vtest (TCP).
+  Atrium adds a third backend over /dev/atrium-gpu0 and needs an
+  entry in this dispatch.
+Atrium-version: 1
+Mergeability:
+  Conflicts only when upstream rewrites vn_renderer.h's create dispatch.
+  Reapply by hand if it does — the seam (call into our backend before
+  falling through to virtgpu/vtest) is what matters, not the exact
+  source layout.
+
+--- a/src/virtio/vulkan/vn_renderer.h
++++ b/src/virtio/vulkan/vn_renderer.h
+@@ -229,6 +229,12 @@ struct vn_renderer {
+    struct vn_renderer_sync_ops sync_ops;
+ };
+
++#ifdef HAVE_ATRIUM
++VkResult
++vn_renderer_create_atrium(struct vn_instance *instance,
++                          const VkAllocationCallbacks *alloc,
++                          struct vn_renderer **renderer);
++#endif
+ #ifdef HAVE_LIBDRM
+ VkResult
+ vn_renderer_create_virtgpu(struct vn_instance *instance,
+@@ -246,6 +252,12 @@ vn_renderer_create(struct vn_instance *instance,
+                    const VkAllocationCallbacks *alloc,
+                    struct vn_renderer **renderer)
+ {
++#ifdef HAVE_ATRIUM
++   /* Try the atrium-gpu backend first. Returns INCOMPATIBLE_DRIVER
++    * if /dev/atrium-gpu0 isn't present, in which case we fall through. */
++   if (vn_renderer_create_atrium(instance, alloc, renderer) == VK_SUCCESS)
++      return VK_SUCCESS;
++#endif
+ #ifdef HAVE_LIBDRM
+    if (VN_DEBUG(VTEST)) {
+       VkResult result = vn_renderer_create_vtest(instance, alloc, renderer);
+--- a/src/virtio/vulkan/meson.build
++++ b/src/virtio/vulkan/meson.build
+@@ -116,6 +116,12 @@ if system_has_kms_drm
+   vn_deps += dep_libdrm
+ endif
+
++if get_option('atrium')
++  libvn_files += files('../../atrium/vn_renderer_atrium.c')
++  vn_c_args   += '-DHAVE_ATRIUM'
++  vn_incs     += include_directories('../../atrium')
++endif
++
+ if with_platform_wayland or with_platform_x11 or \
+    (system_has_kms_drm and not with_platform_android) or \
+    with_platform_windows
+--- a/meson.options
++++ b/meson.options
+@@ -1,3 +1,9 @@
++option(
++  'atrium',
++  type : 'boolean',
++  value : false,
++  description : 'Build the Atrium GPU venus backend (src/atrium/vn_renderer_atrium.c).',
++)
+ # Copyright © 2017-2019 Intel Corporation
+ # SPDX-License-Identifier: MIT
