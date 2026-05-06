@@ -1,3 +1,9 @@
+option(
+  'atrium',
+  type : 'boolean',
+  value : false,
+  description : 'Build the Atrium GPU venus backend (src/atrium/vn_renderer_atrium.c).',
+)
 # Copyright © 2017-2019 Intel Corporation
 # SPDX-License-Identifier: MIT
 
