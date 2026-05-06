@@ -32,6 +32,7 @@ struct atrium_gpu_alloc {
 	uint64_t mmap_offset;
 };
 #define ATRIUM_GPU_IOC_ALLOC  _IOWR('G', 1, struct atrium_gpu_alloc)
+#define ATRIUM_GPU_IOC_FREE   _IOW ('G', 2, uint32_t)
 
 #define ATRIUM_GPU_CAPSET_VENUS  4
 
