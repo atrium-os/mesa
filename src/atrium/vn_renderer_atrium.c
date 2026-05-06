@@ -24,6 +24,7 @@
  * Copyright (c) 2026 Atrium contributors.
  */
 
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -138,8 +139,13 @@ atrium_submit(struct vn_renderer *renderer,
             .cmd_size = (uint32_t)b->cs_size,
             .flags    = ATRIUM_GPU_SUBMIT_3D_SIGNAL_FENCE,
          };
-         if (ioctl(r->fd, ATRIUM_GPU_IOC_SUBMIT_3D, &sub) < 0)
+         fprintf(stderr, "[atrium-vn] SUBMIT_3D ring=%u sz=%u\n",
+                 b->ring_idx, (unsigned)b->cs_size);
+         if (ioctl(r->fd, ATRIUM_GPU_IOC_SUBMIT_3D, &sub) < 0) {
+            fprintf(stderr, "[atrium-vn] SUBMIT_3D failed: %s\n",
+                    strerror(errno));
             return VK_ERROR_DEVICE_LOST;
+         }
       }
 
       /* Submit is synchronous (host fence retires before SUBMIT_3D
