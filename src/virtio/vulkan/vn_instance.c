@@ -304,7 +304,13 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    mtx_init(&instance->physical_device.mutex, mtx_plain);
    mtx_init(&instance->ring_idx_mutex, mtx_plain);
 
+   {
+      uint32_t apiv = instance->base.vk.app_info.api_version;
+      vn_log(instance, "vkCreateInstance: app api_version=0x%x neg_icd=%u",
+             apiv, vk_get_negotiated_icd_version());
+   }
    if (!vn_icd_supports_api_version(instance->base.vk.app_info.api_version)) {
+      vn_log(instance, "vkCreateInstance: ICD does not support api_version");
       result = VK_ERROR_INCOMPATIBLE_DRIVER;
       goto out_mtx_destroy;
    }
