@@ -509,7 +509,10 @@ atrium_init_renderer_info(struct atrium_renderer *r)
    info->has_external_sync    = false;
    info->has_implicit_fencing = false;
    info->has_guest_vram       = false;
-   info->max_timeline_count   = 1;
+   /* venus reserves ring 0 for the CPU timeline and allocates one
+    * additional ring per VkQueue. 64 is the upstream virtgpu default
+    * (matches the ring_idx_used_mask bit width). */
+   info->max_timeline_count   = 64;
 }
 
 static VkResult
