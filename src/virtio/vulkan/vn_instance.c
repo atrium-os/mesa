@@ -342,6 +342,7 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
       goto out_shmem_pool_fini;
 
    result = vn_instance_init_renderer_versions(instance);
+   vn_log(instance, "init_renderer_versions returned %d", result);
    if (result != VK_SUCCESS)
       goto out_ring_fini;
 
@@ -365,8 +366,11 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
       local_create_info.pApplicationInfo = &local_app_info;
    }
 
+   vn_log(instance, "calling vn_call_vkCreateInstance api_version=0x%x",
+          pCreateInfo->pApplicationInfo ? pCreateInfo->pApplicationInfo->apiVersion : 0);
    result = vn_call_vkCreateInstance(instance->ring.ring, pCreateInfo, NULL,
                                      &instance_handle);
+   vn_log(instance, "vn_call_vkCreateInstance returned %d", result);
    if (result != VK_SUCCESS)
       goto out_ring_fini;
 
