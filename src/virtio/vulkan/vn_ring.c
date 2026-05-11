@@ -9,6 +9,18 @@
 #include <sys/resource.h>
 #endif
 
+#if (DETECT_OS_BSD || DETECT_OS_LINUX) && !DETECT_OS_ANDROID
+#include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
+/* Available on FreeBSD libthr and glibc; allows initializing a pthread
+ * mutex with a user-supplied allocator. Used below to place the ring
+ * mutex on its own page (defense against macOS-HVF shmem-page aliasing
+ * — see comment on `atrium_ring_mutex_init`). */
+extern int _pthread_mutex_init_calloc_cb(pthread_mutex_t *mutex,
+                                         void *(*calloc_cb)(size_t, size_t));
+#endif
+
 #include "venus-protocol/vn_protocol_driver_transport.h"
 
 #include "vn_cs.h"
@@ -16,6 +28,60 @@
 #include "vn_renderer.h"
 
 #define VN_RING_IDLE_TIMEOUT_NS (1ull * 1000 * 1000)
+
+#if (DETECT_OS_BSD || DETECT_OS_LINUX) && !DETECT_OS_ANDROID
+/*
+ * ATRIUM: place the ring mutex's libthr/glibc struct on its own
+ * page-aligned allocation. On macOS HVF hosts the venus shmem BAR
+ * mapping can transiently alias other host memory pages, and writes
+ * by venus into the "shmem" can clobber neighboring libthr state
+ * (specifically the per-thread mutexq head's tqe_prev pointer) when
+ * the ring mutex shares a page with other libthr metadata.
+ *
+ * Isolating the ring mutex on its own page makes it statistically
+ * very unlikely that a transient HVF aliasing event hits this exact
+ * page. Combined with QEMU's `virtio_gpu_virgl_map_resource_blob`
+ * touch+mlock pre-fault, the ring becomes reliable on macOS hosts
+ * without ill effect on Linux/BSD hosts.
+ *
+ * The real fix lives in Apple's HVF or in QEMU's HVF accel-ops; this
+ * is defense-in-depth at the venus driver layer.
+ */
+static void *
+atrium_ring_mutex_calloc(size_t nmemb, size_t size)
+{
+   size_t total = nmemb * size;
+   size_t pgsz = (size_t)sysconf(_SC_PAGESIZE);
+   if (total > pgsz)
+      return NULL;
+   void *p = NULL;
+   if (posix_memalign(&p, pgsz, pgsz) != 0)
+      return NULL;
+   memset(p, 0, pgsz);
+   return p;
+}
+
+static int
+atrium_ring_mutex_init(mtx_t *m)
+{
+   /* mtx_t on FreeBSD/Linux is a typedef for pthread_mutex_t. The
+    * calloc_cb is invoked exactly once during init with nmemb=1 and
+    * size=sizeof(struct pthread_mutex). We hand back a fresh page.
+    *
+    * Falls back to plain mtx_init if the libthr/glibc private symbol
+    * isn't available at link time (unlikely; both currently expose it). */
+   if (_pthread_mutex_init_calloc_cb((pthread_mutex_t *)m,
+                                     atrium_ring_mutex_calloc) == 0)
+      return thrd_success;
+   return mtx_init(m, mtx_plain);
+}
+#else
+static inline int
+atrium_ring_mutex_init(mtx_t *m)
+{
+   return mtx_init(m, mtx_plain);
+}
+#endif
 
 static_assert(ATOMIC_INT_LOCK_FREE == 2 && sizeof(atomic_uint) == 4,
               "vn_ring_shared requires lock-free 32-bit atomic_uint");
@@ -314,7 +380,7 @@ vn_ring_create(struct vn_instance *instance,
    ring->shared.buffer = shared + layout->buffer_offset;
    ring->shared.extra = shared + layout->extra_offset;
 
-   mtx_init(&ring->mutex, mtx_plain);
+   atrium_ring_mutex_init(&ring->mutex);
 
    ring->direct_size = layout->buffer_size >> direct_order;
    assert(ring->direct_size);
